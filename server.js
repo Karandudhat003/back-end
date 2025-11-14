@@ -158,11 +158,10 @@ app.get("/api/me", authenticate, (req, res) => {
   res.json({ user: req.user });
 });
 
-
-const productRoutes = require("./src/routes/productRoutes");
-const adminRoutes = require("./src/routes/adminRoutes");
-const itemRoutes = require("./src/routes/itemRoutes");
-const userRoutes = require("./src/routes/userRoutes");
+const productRoutes = require("./src/routes/productRoutes.js");
+const adminRoutes = require("./src/routes/adminRoutes.js");
+const itemRoutes = require("./src/routes/itemRoutes.js");
+const userRoutes = require("./src/routes/userRoutes.js");
 // const passwordRoutes = require("./src/routes/passwordRoutes");
 // app.use("/api/password", passwordRoutes);
 // const passwordController = require("./src/controllers/passwordController");
