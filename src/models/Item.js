@@ -11,7 +11,6 @@ const itemSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-
 module.exports = mongoose.model("Item", itemSchema);
 
 
@@ -43,4 +42,5 @@ module.exports = mongoose.model("Item", itemSchema);
 // itemSchema.index({ name: 1, createdBy: 1 }, { unique: true, sparse: true });
 
 // module.exports = mongoose.model("Item", itemSchema);
+
 
