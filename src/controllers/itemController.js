@@ -250,7 +250,8 @@ exports.deleteItem = async (req, res) => {
       error: error.message,
     });
   }
-};const Item = require("../models/Item");
+};
+// const Item = require("../models/Item");
 
 // const cloudinary = require("../config/cloudinary");
 // const streamifier = require("streamifier");
@@ -567,4 +568,5 @@ exports.deleteItem = async (req, res) => {
 //     });
 //   }
 // };
+
 
