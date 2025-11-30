@@ -326,8 +326,6 @@
 //   }
 // };
 
-
-
 const Product = require("../models/Product");
 const Item = require("../models/Item");
 const mongoose = require("mongoose");
@@ -588,13 +586,20 @@ exports.editProduct = async (req, res) => {
       }
     }
 
-    console.log("📤 Update data includeGst:", data.includeGst, "value:", data.value);
+    console.log("📤 Update data - includeGst:", data.includeGst, "value:", data.value);
 
     const updatedProduct = await Product.findByIdAndUpdate(
       req.params.id,
       data,
       { new: true, runValidators: true }
     ).populate("items.item");
+
+    if (!updatedProduct) {
+      return res.status(404).json({
+        success: false,
+        message: "Product not found after update"
+      });
+    }
 
     const productObj = updatedProduct.toObject();
 
@@ -607,7 +612,7 @@ exports.editProduct = async (req, res) => {
       } : null)
       .filter(Boolean);
 
-    console.log("✅ Product updated, includeGst:", productObj.includeGst, "price type:", productObj.value);
+    console.log("✅ Product updated - includeGst:", productObj.includeGst, "price type:", productObj.value);
 
     res.json({
       success: true,
