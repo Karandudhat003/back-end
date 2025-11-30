@@ -23,6 +23,16 @@
 //       min: 1
 //     }
 //   }],
+//   // 🔥 NEW: User ownership fields (optional - won't break existing data)
+//   createdBy: { 
+//     type: mongoose.Schema.Types.ObjectId, 
+//     ref: 'User'
+//     // NOT required - so existing data without this field will still work
+//   },
+//   createdByUsername: { 
+//     type: String
+//     // NOT required - so existing data without this field will still work
+//   }
 // }, {
 //   timestamps: true
 // });
@@ -160,7 +170,6 @@
 // module.exports = mongoose.model("Product", productSchema);
 
 
-const mongoose = require("mongoose");
 
 const productSchema = new mongoose.Schema({
   name: { type: String, required: true },
@@ -168,7 +177,7 @@ const productSchema = new mongoose.Schema({
   address: { type: String, required: true, default: "SURAT" },
   includeGst: { type: Boolean, required: true, default: false },
   dis: { type: String, default: "0" },
-  value: { type: String, enum: ["nrp", "mrp"], required: true },
+  value: { type: String, enum: ["nrp", "mrp", "manual"], required: true }, // Added "manual"
   date: { type: Date, default: Date.now },
   totalQuantity: { type: Number, default: 0 },
   totalAmount: { type: Number, default: 0 },
@@ -182,28 +191,29 @@ const productSchema = new mongoose.Schema({
       type: Number,
       default: 1,
       min: 1
+    },
+    // 🔥 NEW: Store manual price if pricing type is "manual"
+    manualPrice: {
+      type: Number,
+      default: 0,
+      min: 0
     }
   }],
-  // 🔥 NEW: User ownership fields (optional - won't break existing data)
   createdBy: { 
     type: mongoose.Schema.Types.ObjectId, 
     ref: 'User'
-    // NOT required - so existing data without this field will still work
   },
   createdByUsername: { 
     type: String
-    // NOT required - so existing data without this field will still work
   }
 }, {
   timestamps: true
 });
 
-// Transform output to always include includeGst as boolean
+// Transform output
 productSchema.set('toJSON', {
   transform: function (doc, ret) {
-    // Ensure includeGst is always a boolean
     ret.includeGst = ret.includeGst === true;
-    // Ensure address has default
     if (!ret.address) {
       ret.address = "SURAT";
     }
@@ -213,9 +223,7 @@ productSchema.set('toJSON', {
 
 productSchema.set('toObject', {
   transform: function (doc, ret) {
-    // Ensure includeGst is always a boolean
     ret.includeGst = ret.includeGst === true;
-    // Ensure address has default
     if (!ret.address) {
       ret.address = "SURAT";
     }
@@ -243,7 +251,15 @@ productSchema.pre("save", async function (next) {
         const itemData = itemMap[entry.item.toString()];
         if (itemData) {
           const qty = entry.quantity || 1;
-          const rate = this.value === 'nrp' ? (itemData.nrp || 0) : (itemData.mrp || 0);
+          
+          // 🔥 NEW: Use manual price if value is "manual", otherwise use nrp/mrp
+          let rate = 0;
+          if (this.value === 'manual') {
+            rate = entry.manualPrice || 0;
+          } else {
+            rate = this.value === 'nrp' ? (itemData.nrp || 0) : (itemData.mrp || 0);
+          }
+          
           totalQty += qty;
           totalAmt += qty * rate;
         }
@@ -274,8 +290,6 @@ productSchema.pre("save", async function (next) {
 productSchema.pre("findOneAndUpdate", async function (next) {
   try {
     const update = this.getUpdate();
-
-    // Get the document being updated to access current values
     const docToUpdate = await this.model.findOne(this.getQuery());
 
     if (update.items && update.items.length > 0) {
@@ -296,7 +310,15 @@ productSchema.pre("findOneAndUpdate", async function (next) {
         const itemData = itemMap[itemId.toString()];
         if (itemData) {
           const qty = entry.quantity || 1;
-          const rate = update.value === 'nrp' ? (itemData.nrp || 0) : (itemData.mrp || 0);
+          
+          // 🔥 NEW: Use manual price if value is "manual"
+          let rate = 0;
+          if (update.value === 'manual') {
+            rate = entry.manualPrice || 0;
+          } else {
+            rate = update.value === 'nrp' ? (itemData.nrp || 0) : (itemData.mrp || 0);
+          }
+          
           totalQty += qty;
           totalAmt += qty * rate;
         }
@@ -307,7 +329,6 @@ productSchema.pre("findOneAndUpdate", async function (next) {
       const discountAmount = (totalAmt * discountPercent) / 100;
       const afterDiscount = totalAmt - discountAmount;
 
-      // Determine includeGst value - use update value if provided, else use existing
       const includeGst = update.includeGst !== undefined
         ? update.includeGst
         : (docToUpdate ? docToUpdate.includeGst : false);
