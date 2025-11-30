@@ -168,8 +168,7 @@
 // });
 
 // module.exports = mongoose.model("Product", productSchema);
-
-
+const mongoose = require("mongoose");
 
 const productSchema = new mongoose.Schema({
   name: { type: String, required: true },
@@ -177,7 +176,7 @@ const productSchema = new mongoose.Schema({
   address: { type: String, required: true, default: "SURAT" },
   includeGst: { type: Boolean, required: true, default: false },
   dis: { type: String, default: "0" },
-  value: { type: String, enum: ["nrp", "mrp", "manual"], required: true }, // Added "manual"
+  value: { type: String, enum: ["nrp", "mrp", "manual"], required: true },
   date: { type: Date, default: Date.now },
   totalQuantity: { type: Number, default: 0 },
   totalAmount: { type: Number, default: 0 },
@@ -192,7 +191,6 @@ const productSchema = new mongoose.Schema({
       default: 1,
       min: 1
     },
-    // 🔥 NEW: Store manual price if pricing type is "manual"
     manualPrice: {
       type: Number,
       default: 0,
@@ -210,7 +208,7 @@ const productSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Transform output
+// Transform output to always include includeGst as boolean
 productSchema.set('toJSON', {
   transform: function (doc, ret) {
     ret.includeGst = ret.includeGst === true;
@@ -252,7 +250,7 @@ productSchema.pre("save", async function (next) {
         if (itemData) {
           const qty = entry.quantity || 1;
           
-          // 🔥 NEW: Use manual price if value is "manual", otherwise use nrp/mrp
+          // Handle manual price
           let rate = 0;
           if (this.value === 'manual') {
             rate = entry.manualPrice || 0;
@@ -311,7 +309,7 @@ productSchema.pre("findOneAndUpdate", async function (next) {
         if (itemData) {
           const qty = entry.quantity || 1;
           
-          // 🔥 NEW: Use manual price if value is "manual"
+          // Handle manual price
           let rate = 0;
           if (update.value === 'manual') {
             rate = entry.manualPrice || 0;
