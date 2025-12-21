@@ -19,6 +19,7 @@
   "dependencies": {
     "bcrypt": "^6.0.0",
     "bcryptjs": "^2.4.3",
+    "chromium": "^3.0.3",
     "cloudinary": "^2.8.0",
     "cors": "^2.8.5",
     "dotenv": "^16.6.1",
@@ -27,6 +28,9 @@
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.19.2",
     "multer": "^2.0.2",
+    "node-fetch": "^3.3.2",
+    "puppeteer": "^24.34.0",
+    "puppeteer-core": "^24.34.0",
     "streamifier": "^0.1.1"
   },
   "devDependencies": {
