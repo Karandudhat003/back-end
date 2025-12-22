@@ -580,26 +580,57 @@
 //         }
 //     }
 // };
-
 const Product = require("../models/Product");
-const puppeteer = require("puppeteer-core");
+const puppeteer = require("puppeteer");
 const fetch = require("node-fetch");
 const fs = require("fs").promises;
 const path = require("path");
 
 /* =========================================================
-   PUPPETEER CONFIG (RENDER SAFE)
+   PUPPETEER CONFIG (RENDER OPTIMIZED)
 ========================================================= */
-const getBrowserConfig = async () => ({
-  headless: "new",
-  args: [
-    "--no-sandbox",
-    "--disable-setuid-sandbox",
-    "--disable-dev-shm-usage",
-    "--disable-gpu",
-    "--single-process"
-  ]
-});
+const getBrowserConfig = async () => {
+  const isProduction = process.env.NODE_ENV === 'production';
+  
+  if (isProduction) {
+    // Configuration for Render.com production environment
+    return {
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium-browser',
+      headless: true,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--disable-software-rasterizer',
+        '--disable-extensions',
+        '--disable-background-networking',
+        '--disable-sync',
+        '--disable-translate',
+        '--metrics-recording-only',
+        '--mute-audio',
+        '--no-first-run',
+        '--no-zygote',
+        '--disable-accelerated-2d-canvas',
+        '--memory-pressure-off',
+        '--disable-web-security',
+        '--single-process',
+        '--disable-features=VizDisplayCompositor'
+      ],
+      timeout: 60000
+    };
+  }
+  
+  // Development configuration
+  return {
+    headless: true,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage'
+    ]
+  };
+};
 
 /* =========================================================
    IMAGE → BASE64
@@ -639,7 +670,8 @@ const toBase64 = async (imagePathOrUrl) => {
     const type = response.headers.get("content-type") || "image/png";
 
     return `data:${type};base64,${buffer.toString("base64")}`;
-  } catch {
+  } catch (err) {
+    console.warn(`Image conversion failed for ${imagePathOrUrl}:`, err.message);
     return "";
   }
 };
@@ -662,152 +694,159 @@ const numberToWords = (num) => {
   };
 
   if (num < 1000) return convert(num);
-  if (num < 100000) return `${convert(Math.floor(num / 1000))} Thousand ${convert(num % 1000)}`;
-  if (num < 10000000) return `${convert(Math.floor(num / 100000))} Lakh ${convert(num % 100000)}`;
-  return `${convert(Math.floor(num / 10000000))} Crore ${convert(num % 10000000)}`;
+  if (num < 100000) return `${convert(Math.floor(num / 1000))} Thousand ${convert(num % 1000)}`.trim();
+  if (num < 10000000) return `${convert(Math.floor(num / 100000))} Lakh ${convert(num % 100000)}`.trim();
+  return `${convert(Math.floor(num / 10000000))} Crore ${convert(num % 10000000)}`.trim();
 };
 
 /* =========================================================
    MAIN PDF CONTROLLER
 ========================================================= */
 exports.generatePDF = async (req, res) => {
+  let browser;
+  const startTime = Date.now();
+  
   try {
-        const userId = req.query.userId;
-        const { id } = req.params;
+    // Set longer timeout for this route
+    req.setTimeout(120000); // 2 minutes
+    res.setTimeout(120000);
 
-        if (!userId) {
-            return res.status(400).json({
-                success: false,
-                message: "userId is required"
-            });
+    const userId = req.query.userId;
+    const { id } = req.params;
+
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        message: "userId is required"
+      });
+    }
+
+    console.log(`📄 Starting PDF generation for product ${id}`);
+
+    // Fetch product with populated items
+    const product = await Product.findById(id).populate("items.item").lean();
+
+    if (!product) {
+      return res.status(404).json({
+        success: false,
+        message: "Product not found"
+      });
+    }
+
+    // Check authorization
+    if (product.createdBy && product.createdBy.toString() !== userId) {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied"
+      });
+    }
+
+    // Calculate values
+    const discountPercent = parseFloat(product.dis) || 0;
+    const isNRP = product.value === 'nrp';
+    const isMRP = product.value === 'mrp';
+    const isManual = product.value === 'manual';
+    const includeGst = product.includeGst === true;
+
+    // Load logo
+    let logoBase64 = '';
+    const possibleLogoPaths = [
+      'public/logo.jpg',
+      'src/public/logo.jpg',
+      '../public/logo.jpg',
+    ];
+
+    for (const logoPath of possibleLogoPaths) {
+      try {
+        const absolutePath = path.resolve(__dirname, '..', logoPath);
+        await fs.access(absolutePath);
+        logoBase64 = await toBase64(logoPath);
+        if (logoBase64) {
+          console.log('✅ Logo loaded from:', logoPath);
+          break;
+        }
+      } catch (err) {
+        continue;
+      }
+    }
+
+    // Process items with images
+    console.log(`📦 Processing ${product.items?.length || 0} items...`);
+
+    const itemsWithImages = await Promise.all(
+      (product.items || []).map(async (itemEntry, index) => {
+        const item = itemEntry.item;
+        if (!item) return null;
+
+        let rate = 0;
+        if (isManual) {
+          rate = itemEntry.manualPrice || 0;
+        } else if (isNRP) {
+          rate = parseFloat(item.nrp) || 0;
+        } else if (isMRP) {
+          rate = parseFloat(item.mrp) || 0;
         }
 
-        console.log(`📄 Generating PDF for product ${id}`);
+        const qty = parseFloat(itemEntry.quantity) || 1;
+        const amount = rate * qty;
 
-        // Fetch product with populated items
-        const product = await Product.findById(id).populate("items.item").lean();
+        const base64 = item.image ? await toBase64(item.image) : '';
 
-        if (!product) {
-            return res.status(404).json({
-                success: false,
-                message: "Product not found"
-            });
-        }
+        return {
+          serialNo: index + 1,
+          name: item.name || 'N/A',
+          description: item.description || '',
+          code: item._id?.toString().slice(-8).toUpperCase() || '',
+          rate,
+          qty,
+          amount,
+          base64
+        };
+      })
+    );
 
-        // Check authorization
-        if (product.createdBy && product.createdBy.toString() !== userId) {
-            return res.status(403).json({
-                success: false,
-                message: "Access denied"
-            });
-        }
+    const validItems = itemsWithImages.filter(item => item !== null);
+    console.log(`✅ Processed ${validItems.length} valid items`);
 
-        // Calculate values
-        const discountPercent = parseFloat(product.dis) || 0;
-        const isNRP = product.value === 'nrp';
-        const isMRP = product.value === 'mrp';
-        const isManual = product.value === 'manual';
-        const includeGst = product.includeGst === true;
+    // Calculate totals
+    const othersTotal = validItems.reduce((sum, item) => sum + item.amount, 0);
+    const totalAmount = othersTotal;
+    const netAmount = othersTotal;
+    const totalWithoutDiscount = othersTotal / (1 - discountPercent / 100);
+    const cgst = includeGst ? (othersTotal * 0.09) : 0;
+    const sgst = includeGst ? (othersTotal * 0.09) : 0;
+    const totalAmountWithGst = othersTotal + cgst + sgst;
+    const roundOff = Math.round(totalAmountWithGst) - totalAmountWithGst;
+    const finalAmount = Math.round(totalAmountWithGst);
 
-        // Load logo
-        let logoBase64 = '';
-        const possibleLogoPaths = [
-            'public/logo.jpg',
-            'src/public/logo.jpg',
-            '../public/logo.jpg',
-        ];
+    const formatCurrency = (value) => value.toFixed(2);
+    const formatDate = (date) => new Date(date).toLocaleDateString("en-GB", {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric'
+    });
 
-        for (const logoPath of possibleLogoPaths) {
-            try {
-                const absolutePath = path.resolve(__dirname, '..', logoPath);
-                await fs.access(absolutePath);
-                logoBase64 = await toBase64(logoPath);
-                if (logoBase64) {
-                    console.log('✅ Logo loaded from:', logoPath);
-                    break;
-                }
-            } catch (err) {
-                continue;
-            }
-        }
+    // Generate all item rows at once
+    const generateItemRows = () => validItems.map(item => `
+      <tr>
+        <td class="text-center">${item.serialNo}</td>
+        <td class="text-left">
+          <strong>${item.name}</strong>
+          ${item.description ? `<br><span style="font-size: 9px; color: #666;">${item.description}</span>` : ''}
+        </td>
+        <td class="text-center">${item.code || '-'}</td>
+        <td class="text-center">
+          ${item.base64 ? `<img src="${item.base64}" class="item-image" alt="${item.name}">` : ''}
+        </td>
+        <td class="text-right">${formatCurrency(item.rate)}</td>
+        <td class="text-center">${formatCurrency(item.qty)}</td>
+        <td class="text-right">${formatCurrency(discountPercent)}</td>
+        <td class="text-right">${formatCurrency(item.amount)}</td>
+      </tr>
+    `).join('');
 
-        // Process items with images
-        console.log(`📦 Processing ${product.items?.length || 0} items...`);
-
-        const itemsWithImages = await Promise.all(
-            (product.items || []).map(async (itemEntry, index) => {
-                const item = itemEntry.item;
-                if (!item) return null;
-
-                let rate = 0;
-                if (isManual) {
-                    rate = itemEntry.manualPrice || 0;
-                } else if (isNRP) {
-                    rate = parseFloat(item.nrp) || 0;
-                } else if (isMRP) {
-                    rate = parseFloat(item.mrp) || 0;
-                }
-
-                const qty = parseFloat(itemEntry.quantity) || 1;
-                const amount = rate * qty;
-
-                const base64 = item.image ? await toBase64(item.image) : '';
-
-                return {
-                    serialNo: index + 1,
-                    name: item.name || 'N/A',
-                    description: item.description || '',
-                    code: item._id?.toString().slice(-8).toUpperCase() || '',
-                    rate,
-                    qty,
-                    amount,
-                    base64
-                };
-            })
-        );
-
-        const validItems = itemsWithImages.filter(item => item !== null);
-        console.log(`✅ Processed ${validItems.length} valid items`);
-
-        // Calculate totals
-        const othersTotal = validItems.reduce((sum, item) => sum + item.amount, 0);
-        const totalAmount = othersTotal;
-        const netAmount = othersTotal;
-        const totalWithoutDiscount = othersTotal / (1 - discountPercent / 100);
-        const cgst = includeGst ? (othersTotal * 0.09) : 0;
-        const sgst = includeGst ? (othersTotal * 0.09) : 0;
-        const totalAmountWithGst = othersTotal + cgst + sgst;
-        const roundOff = Math.round(totalAmountWithGst) - totalAmountWithGst;
-        const finalAmount = Math.round(totalAmountWithGst);
-
-        const formatCurrency = (value) => value.toFixed(2);
-        const formatDate = (date) => new Date(date).toLocaleDateString("en-GB", {
-            day: '2-digit',
-            month: 'short',
-            year: 'numeric'
-        });
-
-        // Generate all item rows at once
-        const generateItemRows = () => validItems.map(item => `
-            <tr>
-                <td class="text-center">${item.serialNo}</td>
-                <td class="text-left">
-                    <strong>${item.name}</strong>
-                    ${item.description ? `<br><span style="font-size: 9px; color: #666;">${item.description}</span>` : ''}
-                </td>
-                <td class="text-center">${item.code || '-'}</td>
-                <td class="text-center">
-                    ${item.base64 ? `<img src="${item.base64}" class="item-image" alt="${item.name}">` : ''}
-                </td>
-                <td class="text-right">${formatCurrency(item.rate)}</td>
-                <td class="text-center">${formatCurrency(item.qty)}</td>
-                <td class="text-right">${formatCurrency(discountPercent)}</td>
-                <td class="text-right">${formatCurrency(item.amount)}</td>
-            </tr>
-        `).join('');
-
-        // HTML template (same as before)
-        const html = `<!DOCTYPE html>
+    // HTML template
+    const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -1019,33 +1058,58 @@ exports.generatePDF = async (req, res) => {
 </body>
 </html>`;
 
+    console.log('🚀 Launching browser...');
     browser = await puppeteer.launch(await getBrowserConfig());
+    
     const page = await browser.newPage();
+    
+    // Set viewport to A4 size for better rendering
+    await page.setViewport({ width: 794, height: 1123 });
 
+    console.log('📝 Setting page content...');
     await page.setContent(html, {
-      waitUntil: ["domcontentloaded", "networkidle0"],
-      timeout: 60000
+      waitUntil: "networkidle0",
+      timeout: 45000
     });
 
+    console.log('📄 Generating PDF...');
     const pdfBuffer = await page.pdf({
       format: "A4",
       printBackground: true,
+      preferCSSPageSize: true,
       margin: { top: "10mm", bottom: "10mm", left: "10mm", right: "10mm" }
     });
 
     await browser.close();
+    browser = null;
+
+    const generationTime = Date.now() - startTime;
+    console.log(`✅ PDF generated successfully in ${generationTime}ms`);
 
     res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", "attachment; filename=quotation.pdf");
+    res.setHeader("Content-Disposition", `attachment; filename=quotation-${id}.pdf`);
     res.setHeader("Content-Length", pdfBuffer.length);
     res.end(pdfBuffer);
 
   } catch (error) {
-    if (browser) await browser.close();
+    if (browser) {
+      try {
+        await browser.close();
+      } catch (closeError) {
+        console.error("Error closing browser:", closeError.message);
+      }
+    }
+    
+    const generationTime = Date.now() - startTime;
+    console.error(`❌ PDF generation failed after ${generationTime}ms:`, error.message);
+    console.error('Stack trace:', error.stack);
+    
     res.status(500).json({
       success: false,
       message: "PDF generation failed",
-      error: error.message
+      error: error.message,
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined,
+      timestamp: new Date().toISOString()
     });
   }
 };
