@@ -581,7 +581,7 @@
 //     }
 // };
 const Product = require("../models/Product");
-const puppeteer = require("puppeteer");
+const puppeteer = require("puppeteer-core");
 const fetch = require("node-fetch");
 const fs = require("fs").promises;
 const path = require("path");
