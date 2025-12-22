@@ -4,7 +4,6 @@ const puppeteer = require("puppeteer");
 const fetch = require("node-fetch");
 const fs = require("fs").promises;
 const path = require("path"); 
-
 // ============================================
 // 🔥 CHROME DETECTION HELPER
 // ============================================
