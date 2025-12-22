@@ -581,8 +581,6 @@
 //     }
 // };
 
-
-
 const Product = require("../models/Product");
 const puppeteer = require("puppeteer-core");
 const fetch = require("node-fetch");
@@ -623,9 +621,9 @@ const toBase64 = async (imagePathOrUrl) => {
 
       let mime = "image/png";
       if (ext === ".jpg" || ext === ".jpeg") mime = "image/jpeg";
-      if (ext === ".svg") mime = "image/svg+xml";
-      if (ext === ".gif") mime = "image/gif";
-      if (ext === ".webp") mime = "image/webp";
+      else if (ext === ".svg") mime = "image/svg+xml";
+      else if (ext === ".gif") mime = "image/gif";
+      else if (ext === ".webp") mime = "image/webp";
 
       return `data:${mime};base64,${buffer.toString("base64")}`;
     }
@@ -636,6 +634,7 @@ const toBase64 = async (imagePathOrUrl) => {
     });
 
     if (!response.ok) return "";
+
     const buffer = await response.buffer();
     const type = response.headers.get("content-type") || "image/png";
 
@@ -672,52 +671,143 @@ const numberToWords = (num) => {
    MAIN PDF CONTROLLER
 ========================================================= */
 exports.generatePDF = async (req, res) => {
-  let browser;
-
   try {
-    const { id } = req.params;
-    const { userId } = req.query;
+        const userId = req.query.userId;
+        const { id } = req.params;
 
-    if (!userId) {
-      return res.status(400).json({ success: false, message: "userId required" });
-    }
+        if (!userId) {
+            return res.status(400).json({
+                success: false,
+                message: "userId is required"
+            });
+        }
 
-    const product = await Product.findById(id)
-      .populate("items.item")
-      .lean();
+        console.log(`📄 Generating PDF for product ${id}`);
 
-    if (!product) {
-      return res.status(404).json({ success: false, message: "Product not found" });
-    }
+        // Fetch product with populated items
+        const product = await Product.findById(id).populate("items.item").lean();
 
-    if (product.createdBy && product.createdBy.toString() !== userId) {
-      return res.status(403).json({ success: false, message: "Access denied" });
-    }
+        if (!product) {
+            return res.status(404).json({
+                success: false,
+                message: "Product not found"
+            });
+        }
 
-    const rows = await Promise.all(
-      (product.items || []).map(async (row, index) => {
-        if (!row.item) return null;
+        // Check authorization
+        if (product.createdBy && product.createdBy.toString() !== userId) {
+            return res.status(403).json({
+                success: false,
+                message: "Access denied"
+            });
+        }
 
-        const rate = Number(row.manualPrice || row.item.nrp || row.item.mrp || 0);
-        const qty = Number(row.quantity || 1);
-        const amount = rate * qty;
+        // Calculate values
+        const discountPercent = parseFloat(product.dis) || 0;
+        const isNRP = product.value === 'nrp';
+        const isMRP = product.value === 'mrp';
+        const isManual = product.value === 'manual';
+        const includeGst = product.includeGst === true;
 
-        return {
-          no: index + 1,
-          name: row.item.name || "N/A",
-          qty,
-          rate,
-          amount,
-          image: row.item.image ? await toBase64(row.item.image) : ""
-        };
-      })
-    );
+        // Load logo
+        let logoBase64 = '';
+        const possibleLogoPaths = [
+            'public/logo.jpg',
+            'src/public/logo.jpg',
+            '../public/logo.jpg',
+        ];
 
-    const items = rows.filter(Boolean);
-    const total = items.reduce((s, i) => s + i.amount, 0);
-    const finalAmount = Math.round(total);
+        for (const logoPath of possibleLogoPaths) {
+            try {
+                const absolutePath = path.resolve(__dirname, '..', logoPath);
+                await fs.access(absolutePath);
+                logoBase64 = await toBase64(logoPath);
+                if (logoBase64) {
+                    console.log('✅ Logo loaded from:', logoPath);
+                    break;
+                }
+            } catch (err) {
+                continue;
+            }
+        }
 
-      const html = `<!DOCTYPE html>
+        // Process items with images
+        console.log(`📦 Processing ${product.items?.length || 0} items...`);
+
+        const itemsWithImages = await Promise.all(
+            (product.items || []).map(async (itemEntry, index) => {
+                const item = itemEntry.item;
+                if (!item) return null;
+
+                let rate = 0;
+                if (isManual) {
+                    rate = itemEntry.manualPrice || 0;
+                } else if (isNRP) {
+                    rate = parseFloat(item.nrp) || 0;
+                } else if (isMRP) {
+                    rate = parseFloat(item.mrp) || 0;
+                }
+
+                const qty = parseFloat(itemEntry.quantity) || 1;
+                const amount = rate * qty;
+
+                const base64 = item.image ? await toBase64(item.image) : '';
+
+                return {
+                    serialNo: index + 1,
+                    name: item.name || 'N/A',
+                    description: item.description || '',
+                    code: item._id?.toString().slice(-8).toUpperCase() || '',
+                    rate,
+                    qty,
+                    amount,
+                    base64
+                };
+            })
+        );
+
+        const validItems = itemsWithImages.filter(item => item !== null);
+        console.log(`✅ Processed ${validItems.length} valid items`);
+
+        // Calculate totals
+        const othersTotal = validItems.reduce((sum, item) => sum + item.amount, 0);
+        const totalAmount = othersTotal;
+        const netAmount = othersTotal;
+        const totalWithoutDiscount = othersTotal / (1 - discountPercent / 100);
+        const cgst = includeGst ? (othersTotal * 0.09) : 0;
+        const sgst = includeGst ? (othersTotal * 0.09) : 0;
+        const totalAmountWithGst = othersTotal + cgst + sgst;
+        const roundOff = Math.round(totalAmountWithGst) - totalAmountWithGst;
+        const finalAmount = Math.round(totalAmountWithGst);
+
+        const formatCurrency = (value) => value.toFixed(2);
+        const formatDate = (date) => new Date(date).toLocaleDateString("en-GB", {
+            day: '2-digit',
+            month: 'short',
+            year: 'numeric'
+        });
+
+        // Generate all item rows at once
+        const generateItemRows = () => validItems.map(item => `
+            <tr>
+                <td class="text-center">${item.serialNo}</td>
+                <td class="text-left">
+                    <strong>${item.name}</strong>
+                    ${item.description ? `<br><span style="font-size: 9px; color: #666;">${item.description}</span>` : ''}
+                </td>
+                <td class="text-center">${item.code || '-'}</td>
+                <td class="text-center">
+                    ${item.base64 ? `<img src="${item.base64}" class="item-image" alt="${item.name}">` : ''}
+                </td>
+                <td class="text-right">${formatCurrency(item.rate)}</td>
+                <td class="text-center">${formatCurrency(item.qty)}</td>
+                <td class="text-right">${formatCurrency(discountPercent)}</td>
+                <td class="text-right">${formatCurrency(item.amount)}</td>
+            </tr>
+        `).join('');
+
+        // HTML template (same as before)
+        const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
