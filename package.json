@@ -31,7 +31,7 @@
     "mongoose": "^8.19.2",
     "multer": "^2.0.2",
     "node-fetch": "^2.7.0",
-    "puppeteer-core": "^21.11.0",
+    "puppeteer-core": "^21.11.0", 
     "streamifier": "^0.1.1"
   },
   "devDependencies": {
