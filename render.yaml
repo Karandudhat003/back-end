@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: back-end-oj7m
+    env: node
+    region: oregon
+    plan: free
+    buildCommand: |
+      echo "=== Installing dependencies ==="
+      npm ci
+      echo "=== Installing Chrome for Puppeteer ==="
+      npx puppeteer browsers install chrome
+      echo "=== Chrome installation complete ==="
+      find /opt/render/project/.cache/puppeteer -name "chrome" -type f 2>/dev/null || echo "Chrome not found in cache"
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PUPPETEER_SKIP_CHROMIUM_DOWNLOAD
+        value: false
