@@ -14,7 +14,8 @@ router.put("/edit/:id", productController.editProduct);
 router.delete("/delete/:id", productController.deleteProduct);
 
 // 🔥 NEW: PDF Download Route
-// router.get("/:id/download-pdf", pdfController.generatePDF);
+router.get("/:id/download-pdf", pdfController.generatePDF);
 
 module.exports = router;
+
 
