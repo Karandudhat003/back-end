@@ -1,39 +1,177 @@
- 
 
 const Product = require("../models/Product");
 const PDFDocument = require("pdfkit");
 const fetch = require("node-fetch");
 const fs = require("fs").promises;
 const path = require("path");
+const https = require('https');
+const http = require('http');
 
 // ============================================
-// HELPER: Convert image to buffer
+// HELPER: Convert image to buffer (ROBUST VERSION)
 // ============================================
 const getImageBuffer = async (imagePathOrUrl) => {
     try {
-        if (!imagePathOrUrl.startsWith('http')) {
-            const absolutePath = path.resolve(__dirname, '..', imagePathOrUrl.replace(/^\//, ''));
+        console.log('🖼️  Loading image:', imagePathOrUrl);
+
+        if (!imagePathOrUrl) {
+            console.log('   ⚠️  No image path provided');
+            return null;
+        }
+
+        // Handle HTTP/HTTPS URLs
+        if (imagePathOrUrl.startsWith('http://') || imagePathOrUrl.startsWith('https://')) {
+            console.log('   📡 Fetching from URL...');
+
+            return new Promise((resolve, reject) => {
+                const protocol = imagePathOrUrl.startsWith('https') ? https : http;
+                const timeout = 20000; // 20 seconds
+
+                const req = protocol.get(imagePathOrUrl, {
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                        'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
+                        'Accept-Encoding': 'gzip, deflate, br',
+                        'Connection': 'keep-alive'
+                    }
+                }, (res) => {
+                    // Handle redirects
+                    if (res.statusCode === 301 || res.statusCode === 302 || res.statusCode === 307 || res.statusCode === 308) {
+                        console.log(`   🔄 Redirect to: ${res.headers.location}`);
+                        return getImageBuffer(res.headers.location).then(resolve).catch(reject);
+                    }
+
+                    if (res.statusCode !== 200) {
+                        console.error(`   ❌ HTTP ${res.statusCode}: ${res.statusMessage}`);
+                        resolve(null);
+                        return;
+                    }
+
+                    const chunks = [];
+                    res.on('data', chunk => chunks.push(chunk));
+                    res.on('end', () => {
+                        const buffer = Buffer.concat(chunks);
+                        console.log(`   ✅ Downloaded ${buffer.length} bytes`);
+                        resolve(buffer);
+                    });
+                    res.on('error', (err) => {
+                        console.error(`   ❌ Stream error:`, err.message);
+                        resolve(null);
+                    });
+                });
+
+                req.on('error', (err) => {
+                    console.error(`   ❌ Request error:`, err.message);
+                    resolve(null);
+                });
+
+                req.setTimeout(timeout, () => {
+                    console.error(`   ❌ Timeout after ${timeout}ms`);
+                    req.destroy();
+                    resolve(null);
+                });
+
+                req.end();
+            });
+        }
+
+        // Handle local file paths
+        console.log('   📁 Loading local file...');
+
+        // Clean up the path
+        let cleanPath = imagePathOrUrl.replace(/\\/g, '/');
+
+        // Try multiple path variations
+        const pathVariations = [
+            cleanPath,
+            cleanPath.replace(/^\/+/, ''),
+            path.join(process.cwd(), cleanPath),
+            path.join(process.cwd(), cleanPath.replace(/^\/+/, '')),
+            path.join(process.cwd(), 'public', cleanPath.replace(/^\/+/, '')),
+            path.join(process.cwd(), 'src', 'public', cleanPath.replace(/^\/+/, '')),
+            path.join(process.cwd(), 'uploads', cleanPath.replace(/^\/+/, '')),
+            path.join(__dirname, '..', cleanPath),
+            path.join(__dirname, '..', cleanPath.replace(/^\/+/, '')),
+            path.join(__dirname, '..', 'public', cleanPath.replace(/^\/+/, '')),
+            path.join(__dirname, '..', 'uploads', cleanPath.replace(/^\/+/, ''))
+        ];
+
+        for (const tryPath of pathVariations) {
             try {
-                await fs.access(absolutePath);
-                return await fs.readFile(absolutePath);
+                const stats = await fs.stat(tryPath);
+                if (stats.isFile()) {
+                    const buffer = await fs.readFile(tryPath);
+                    console.log(`   ✅ Loaded from: ${tryPath} (${buffer.length} bytes)`);
+                    return buffer;
+                }
             } catch (err) {
-                console.error('Local image not found:', absolutePath);
-                return null;
+                // Continue to next path
+                continue;
             }
         }
 
-        const response = await fetch(imagePathOrUrl, {
-            timeout: 10000,
-            headers: { 'User-Agent': 'Mozilla/5.0' }
-        });
-
-        if (!response.ok) return null;
-        return await response.buffer();
+        console.error(`   ❌ File not found in any location`);
+        console.error(`   Tried paths:`, pathVariations.slice(0, 5).join('\n   '));
+        return null;
 
     } catch (error) {
-        console.error('Image fetch error:', error.message);
+        console.error('   ❌ Error:', error.message);
         return null;
     }
+};
+
+// ============================================
+// HELPER: Validate image buffer for PDFKit
+// ============================================
+const isValidImageBuffer = (buffer) => {
+    if (!buffer || buffer.length === 0) {
+        return false;
+    }
+
+    // Check for common image file signatures
+    const signatures = {
+        jpeg: [0xFF, 0xD8, 0xFF],
+        png: [0x89, 0x50, 0x4E, 0x47],
+        gif: [0x47, 0x49, 0x46],
+        webp: [0x52, 0x49, 0x46, 0x46] // RIFF
+    };
+
+    // Check JPEG
+    if (buffer[0] === signatures.jpeg[0] &&
+        buffer[1] === signatures.jpeg[1] &&
+        buffer[2] === signatures.jpeg[2]) {
+        console.log('   ✅ Valid JPEG image');
+        return true;
+    }
+
+    // Check PNG
+    if (buffer[0] === signatures.png[0] &&
+        buffer[1] === signatures.png[1] &&
+        buffer[2] === signatures.png[2] &&
+        buffer[3] === signatures.png[3]) {
+        console.log('   ✅ Valid PNG image');
+        return true;
+    }
+
+    // Check GIF
+    if (buffer[0] === signatures.gif[0] &&
+        buffer[1] === signatures.gif[1] &&
+        buffer[2] === signatures.gif[2]) {
+        console.log('   ✅ Valid GIF image');
+        return true;
+    }
+
+    // Check WebP
+    if (buffer[0] === signatures.webp[0] &&
+        buffer[1] === signatures.webp[1] &&
+        buffer[2] === signatures.webp[2] &&
+        buffer[3] === signatures.webp[3]) {
+        console.log('   ✅ Valid WebP image');
+        return true;
+    }
+
+    console.log('   ⚠️  Unknown image format');
+    return false;
 };
 
 // ============================================
@@ -91,7 +229,9 @@ exports.generatePDF = async (req, res) => {
             });
         }
 
-        console.log(`📄 Generating PDF for product ${id}`);
+        console.log(`\n${'='.repeat(60)}`);
+        console.log(`📄 GENERATING PDF FOR PRODUCT: ${id}`);
+        console.log(`${'='.repeat(60)}\n`);
 
         // Fetch product
         const product = await Product.findById(id).populate("items.item").lean();
@@ -118,68 +258,99 @@ exports.generatePDF = async (req, res) => {
         const isManual = product.value === 'manual';
         const includeGst = product.includeGst === true;
 
-        // Load logo
+        // ============================================
+        // LOAD LOGO
+        // ============================================
+        console.log('🏢 LOADING COMPANY LOGO...');
         let logoBuffer = null;
         const possibleLogoPaths = [
             'public/logo.jpg',
+            'public/logo.png',
+            'uploads/logo.jpg',
+            'uploads/logo.png',
             'src/public/logo.jpg',
-            '../public/logo.jpg',
+            'logo.jpg',
         ];
 
         for (const logoPath of possibleLogoPaths) {
-            try {
-                const absolutePath = path.resolve(__dirname, '..', logoPath);
-                await fs.access(absolutePath);
-                logoBuffer = await getImageBuffer(logoPath);
-                if (logoBuffer) {
-                    console.log('✅ Logo loaded from:', logoPath);
-                    break;
-                }
-            } catch (err) {
-                continue;
+            logoBuffer = await getImageBuffer(logoPath);
+            if (logoBuffer && isValidImageBuffer(logoBuffer)) {
+                break;
             }
         }
 
-        // Process items
-        console.log(`📦 Processing ${product.items?.length || 0} items...`);
+        // ============================================
+        // PROCESS ITEMS WITH IMAGES
+        // ============================================
+        console.log(`\n📦 PROCESSING ${product.items?.length || 0} ITEMS...\n`);
 
-        const processedItems = await Promise.all(
-            (product.items || []).map(async (itemEntry, index) => {
-                const item = itemEntry.item;
-                if (!item) return null;
+        const processedItems = [];
+        let successCount = 0;
+        let failCount = 0;
 
-                let rate = 0;
-                if (isManual) {
-                    rate = itemEntry.manualPrice || 0;
-                } else if (isNRP) {
-                    rate = parseFloat(item.nrp) || 0;
-                } else if (isMRP) {
-                    rate = parseFloat(item.mrp) || 0;
+        for (let index = 0; index < (product.items || []).length; index++) {
+            const itemEntry = product.items[index];
+            const item = itemEntry.item;
+
+            if (!item) {
+                console.warn(`⚠️  Item ${index + 1}: NULL/UNDEFINED - Skipping`);
+                continue;
+            }
+
+            console.log(`\n📌 Item ${index + 1}: ${item.name || 'Unnamed'}`);
+            console.log(`   Image field value: ${item.image || 'null'}`);
+
+            // Calculate rate
+            let rate = 0;
+            if (isManual) {
+                rate = itemEntry.manualPrice || 0;
+            } else if (isNRP) {
+                rate = parseFloat(item.nrp) || 0;
+            } else if (isMRP) {
+                rate = parseFloat(item.mrp) || 0;
+            }
+
+            const qty = parseFloat(itemEntry.quantity) || 1;
+            const amount = rate * qty;
+
+            // Load item image
+            let imageBuffer = null;
+            if (item.image) {
+                imageBuffer = await getImageBuffer(item.image);
+                if (imageBuffer && isValidImageBuffer(imageBuffer)) {
+                    successCount++;
+                    console.log(`   ✅ IMAGE LOADED SUCCESSFULLY`);
+                } else {
+                    failCount++;
+                    console.log(`   ❌ IMAGE LOAD FAILED`);
                 }
+            } else {
+                console.log(`   ℹ️  No image path in database`);
+            }
 
-                const qty = parseFloat(itemEntry.quantity) || 1;
-                const amount = rate * qty;
+            processedItems.push({
+                serialNo: index + 1,
+                name: item.name || 'N/A',
+                description: item.description || '',
+                code: item._id?.toString().slice(-8).toUpperCase() || '',
+                rate,
+                qty,
+                amount,
+                imageBuffer,
+                hasImage: !!(imageBuffer && isValidImageBuffer(imageBuffer))
+            });
+        }
 
-                const imageBuffer = item.image ? await getImageBuffer(item.image) : null;
-
-                return {
-                    serialNo: index + 1,
-                    name: item.name || 'N/A',
-                    description: item.description || '',
-                    code: item._id?.toString().slice(-8).toUpperCase() || '',
-                    rate,
-                    qty,
-                    amount,
-                    imageBuffer
-                };
-            })
-        );
-
-        const validItems = processedItems.filter(item => item !== null);
-        console.log(`✅ Processed ${validItems.length} valid items`);
+        console.log(`\n${'='.repeat(60)}`);
+        console.log(`📊 IMAGE LOADING SUMMARY:`);
+        console.log(`   Total items: ${processedItems.length}`);
+        console.log(`   ✅ Images loaded: ${successCount}`);
+        console.log(`   ❌ Images failed: ${failCount}`);
+        console.log(`   📭 No image: ${processedItems.length - successCount - failCount}`);
+        console.log(`${'='.repeat(60)}\n`);
 
         // Calculate totals
-        const othersTotal = validItems.reduce((sum, item) => sum + item.amount, 0);
+        const othersTotal = processedItems.reduce((sum, item) => sum + item.amount, 0);
         const totalAmount = othersTotal;
         const netAmount = othersTotal;
         const totalWithoutDiscount = othersTotal / (1 - discountPercent / 100);
@@ -190,15 +361,16 @@ exports.generatePDF = async (req, res) => {
         const finalAmount = Math.round(totalAmountWithGst);
 
         // ============================================
-        // CREATE PDF WITH PDFKIT
+        // CREATE PDF
         // ============================================
+        console.log('📝 CREATING PDF DOCUMENT...\n');
         const doc = new PDFDocument({
             size: 'A4',
             margin: 30,
             bufferPages: true
         });
 
-        // Collect PDF data in buffer
+        // Collect PDF data
         const chunks = [];
         doc.on('data', chunk => chunks.push(chunk));
         doc.on('end', () => {
@@ -206,13 +378,16 @@ exports.generatePDF = async (req, res) => {
             const sanitizedName = (product.name || 'Customer').replace(/[^a-z0-9]/gi, '_');
             const filename = `Quotation_${sanitizedName}_${new Date().toISOString().split('T')[0]}.pdf`;
 
+            console.log(`\n✅ PDF GENERATED SUCCESSFULLY`);
+            console.log(`   Filename: ${filename}`);
+            console.log(`   Size: ${(pdfBuffer.length / 1024).toFixed(2)} KB\n`);
+
             res.setHeader('Content-Type', 'application/pdf');
             res.setHeader('Content-Length', pdfBuffer.length);
             res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
             res.end(pdfBuffer);
         });
 
-        // Start drawing PDF
         let y = 40;
 
         // ============================================
@@ -221,11 +396,15 @@ exports.generatePDF = async (req, res) => {
         doc.rect(30, 30, 535, 140).stroke();
 
         // Logo
-        if (logoBuffer) {
+        if (logoBuffer && isValidImageBuffer(logoBuffer)) {
             try {
-                doc.image(logoBuffer, 40, 40, { width: 60, height: 60 });
+                doc.image(logoBuffer, 40, 40, {
+                    fit: [60, 60]
+                });
             } catch (err) {
-                console.error('Logo image error:', err);
+                console.error('❌ Logo render error:', err.message);
+                doc.rect(40, 40, 60, 60).stroke();
+                doc.fontSize(20).text('RT', 50, 60);
             }
         } else {
             doc.rect(40, 40, 60, 60).stroke();
@@ -287,10 +466,11 @@ exports.generatePDF = async (req, res) => {
         y += 25;
 
         // Table rows
-        for (const item of validItems) {
-            const rowHeight = 70; // Fixed height for image rows
+        console.log('🎨 RENDERING ITEMS IN PDF...\n');
+        for (let i = 0; i < processedItems.length; i++) {
+            const item = processedItems[i];
+            const rowHeight = 70;
 
-            // Check if we need a new page
             if (y + rowHeight > 750) {
                 doc.addPage();
                 y = 40;
@@ -298,7 +478,7 @@ exports.generatePDF = async (req, res) => {
 
             doc.rect(30, y, 535, rowHeight).stroke();
 
-            // Draw vertical lines
+            // Vertical lines
             colX.slice(1).forEach(x => {
                 doc.moveTo(x, y).lineTo(x, y + rowHeight).stroke();
             });
@@ -320,15 +500,24 @@ exports.generatePDF = async (req, res) => {
             doc.fontSize(8).text(item.code || '-', colX[2] + 2, y + 30, { width: colWidths[2] - 4, align: 'center' });
 
             // Image
-            if (item.imageBuffer) {
+            if (item.hasImage && item.imageBuffer) {
                 try {
-                    doc.image(item.imageBuffer, colX[3] + 5, y + 5, { width: 60, height: 60, fit: [60, 60] });
+                    doc.image(item.imageBuffer, colX[3] + 5, y + 5, {
+                        fit: [60, 60]
+                    });
+                    console.log(`   ✅ Rendered: Item ${i + 1}`);
                 } catch (err) {
-                    console.error('Item image error:', err);
+                    console.error(`   ❌ Render failed: Item ${i + 1} - ${err.message}`);
+                    doc.rect(colX[3] + 5, y + 5, 60, 60).stroke();
+                    doc.fontSize(7).text('Error', colX[3] + 15, y + 30, { width: 40, align: 'center' });
                 }
+            } else {
+                doc.rect(colX[3] + 5, y + 5, 60, 60).stroke();
+                doc.fontSize(7).text('No Image', colX[3] + 10, y + 30, { width: 50, align: 'center' });
             }
 
             // Price, Qty, Disc, Amount
+            doc.fontSize(8).font('Helvetica');
             doc.text(item.rate.toFixed(2), colX[4] + 2, y + 30, { width: colWidths[4] - 4, align: 'right' });
             doc.text(item.qty.toFixed(2), colX[5] + 2, y + 30, { width: colWidths[5] - 4, align: 'center' });
             doc.text(discountPercent.toFixed(2), colX[6] + 2, y + 30, { width: colWidths[6] - 4, align: 'right' });
@@ -348,7 +537,7 @@ exports.generatePDF = async (req, res) => {
         y += 10;
         doc.fontSize(9).font('Helvetica-Bold');
         doc.text('Total', 40, y);
-        doc.text('Others + Total Amount', 300, y);  // Better spacing
+        doc.text('Others + Total Amount', 300, y);
         doc.text(othersTotal.toFixed(2), 505, y, { width: 60, align: 'right' });
 
         y += 20;
@@ -428,7 +617,7 @@ exports.generatePDF = async (req, res) => {
         doc.text('• Only Cash Rate.', 40, y + 50);
 
         // ============================================
-        // BRANDS SECTION
+        // BRANDS SECTION WITH LOGOS
         // ============================================
         y += 70;
         if (y > 680) {
@@ -436,41 +625,102 @@ exports.generatePDF = async (req, res) => {
             y = 40;
         }
 
-        const brands = ['Jaquar', 'kerakoll', 'Roff', 'S', 'simola', 'SEGA', 'MYK LATICRETE', 'SONARA', 'Wintouch', 'AGILIS', 'LEMZON', 'LEZORA'];
-        doc.rect(30, y, 535, 80).stroke();
+        console.log('\n🏷️  LOADING BRAND LOGOS...\n');
+
+        // Brand logos with URLs (Update these URLs with actual working logo URLs)
+        const brands = [
+            { name: 'Jaquar', logo: 'https://vectorseek.com/wp-content/uploads/2023/10/Jaguar-experience-bathing-Logo-Vector.svg-.png' },
+            { name: 'Kerakoll', logo: 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQxdLM5berBUYOfvDlOo1OsCzDnUsotvOn5Iw&s' },
+            { name: 'Roff', logo: 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQSQJ3VThg4g9B7ywtwvAcAFEtnJVp0_g0Scw&s' },
+            { name: 'Somany', logo: 'https://upload.wikimedia.org/wikipedia/commons/6/60/Somany-logo.png' },
+            { name: 'Simola', logo: 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTrM4XAxTLjWz2i2kdI3batGVFu8eRlRiQayQ&s' },
+            { name: 'SEGA', logo: 'https://upload.wikimedia.org/wikipedia/commons/thumb/1/13/SEGA_logo.svg/2560px-SEGA_logo.svg.png' },
+            { name: 'MYK LATICRETE', logo: 'https://paintnhardware.com/img/m/36.jpg' },
+            { name: 'SONARA', logo: 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcS40jZAwXnZ4cKRIH3hHWaMkvr3IuxIPaHZlg&s' },
+            { name: 'Wintouch', logo: 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSkjsl6g8SySMOY0dniGNz4ysEHxWonZpArKQ&s' },
+            { name: 'AGILIS', logo: 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQw7wcfU54HqDOP0FcZ40A7zM2OJAQ2Xu_R_w&s' },
+            { name: 'LEMZON', logo: 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQqtIJxBe9zU7xngcSco2CbRZcu0SmQB1Fo_w&s' },
+            { name: 'LEZORA', logo: 'https://media.licdn.com/dms/image/v2/C4E0BAQHpDcGzwFqILw/company-logo_200_200/company-logo_200_200/0/1630650109134/lezora_vitrified_pvt_ltd__logo?e=2147483647&v=beta&t=hzhLwhQZZS6FFQJvug7Nb9yozaFS_IB5qZ0Wo-kLiQA' }
+        ];
+
+        // Load all brand logos in parallel
+        const brandLogos = await Promise.all(
+            brands.map(async (brand) => {
+                console.log(`   Loading: ${brand.name}`);
+                const logoBuffer = await getImageBuffer(brand.logo);
+                if (logoBuffer && isValidImageBuffer(logoBuffer)) {
+                    console.log(`   ✅ ${brand.name} logo loaded`);
+                    return { ...brand, logoBuffer };
+                } else {
+                    console.log(`   ⚠️  ${brand.name} logo failed, using text`);
+                    return { ...brand, logoBuffer: null };
+                }
+            })
+        );
+
+        // Draw brands section
+        // doc.rect(30, y, 535, 80).stroke();
 
         const brandCols = 4;
         const brandWidth = 535 / brandCols;
         const brandHeight = 80 / 3;
 
-        brands.forEach((brand, i) => {
+        // Render each brand
+        brandLogos.forEach((brand, i) => {
             const col = i % brandCols;
             const row = Math.floor(i / brandCols);
             const bx = 30 + col * brandWidth;
             const by = y + row * brandHeight;
 
-            doc.fontSize(9).font('Helvetica-Bold').text(brand, bx, by + 10, { width: brandWidth, align: 'center' });
+            // Draw cell border
+            // doc.rect(bx, by, brandWidth, brandHeight).stroke();
+
+            if (brand.logoBuffer) {
+                try {
+                    // Display logo image
+                    doc.image(brand.logoBuffer, bx + 10, by + 5, {
+                        fit: [brandWidth - 20, brandHeight - 10],
+                        align: 'center',
+                        valign: 'center'
+                    });
+                } catch (err) {
+                    console.error(`   ❌ Error rendering ${brand.name}:`, err.message);
+                    // Fallback to text
+                    doc.fontSize(9).font('Helvetica-Bold')
+                        .text(brand.name, bx, by + (brandHeight / 2) - 5, {
+                            width: brandWidth,
+                            align: 'center'
+                        });
+                }
+            } else {
+                // Fallback to text if logo not available
+                doc.fontSize(9).font('Helvetica-Bold')
+                    .text(brand.name, bx, by + (brandHeight / 2) - 5, {
+                        width: brandWidth,
+                        align: 'center'
+                    });
+            }
         });
+
+        console.log('✅ Brand section completed\n');
 
         // ============================================
         // FOOTER
         // ============================================
         y += 90;
-        doc.rect(30, y, 535, 80).stroke();
+        // doc.rect(30, y, 535, 80).stroke();
         doc.fontSize(8).font('Helvetica');
         doc.text('For', 480, y + 10);
         doc.font('Helvetica-Bold').text('RAJ TILES', 480, y + 22);
 
-        doc.moveTo(450, y + 55).lineTo(555, y + 55).stroke();
+        // doc.moveTo(450, y + 55).lineTo(555, y + 55).stroke();
         doc.text('Authorized Signatory', 450, y + 58, { width: 105, align: 'center' });
-
-        doc.fontSize(7).font('Helvetica-Bold').text('Prepared By:', 40, y + 65);
-        doc.font('Helvetica').text('CHARMI VORA', 90, y + 65);
 
         doc.end();
 
     } catch (error) {
-        console.error("❌ PDF generation error:", error);
+        console.error("\n❌ PDF GENERATION ERROR:");
+        console.error(error);
 
         if (!res.headersSent) {
             res.status(500).json({
