@@ -1,2 +1,6 @@
-app.use(cors());
-app.use(express.json());
+const { authenticate, authorizeRoles } = require("./auth");
+
+module.exports = {
+  authenticate,
+  authorizeRoles
+};

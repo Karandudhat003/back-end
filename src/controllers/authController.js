@@ -5,6 +5,7 @@ const SECRET = process.env.JWT_SECRET || "supersecretkey"; // Use strong .env ke
 exports.signup = async (req, res) => {
     try {
         const { username, password, confirmPassword, role } = req.body;
+        console.log(req.body , "body data");
 
         // Required fields check
         if (!username || !password || !confirmPassword || !role) {

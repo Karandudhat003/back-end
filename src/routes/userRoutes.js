@@ -19,7 +19,34 @@
 //         req.user = user;
 //         next();
 //     });
-// };
+// };  
+
+
+// function authenticate(req, res, next) {
+//     const header = req.headers.authorization;
+//     if (!header) return res.status(401).json({ success: false, message: "No token" });
+
+//     const token = header.split(" ")[1];
+//     if (!token) return res.status(401).json({ success: false, message: "Token missing" });
+
+//     try {
+//         const decoded = jwt.verify(token, SECRET);
+//         req.user = decoded;
+//         next();
+//     } catch {
+//         res.status(401).json({ success: false, message: "Invalid token" });
+//     }
+// }
+
+// function authorizeRoles(...roles) {
+//     return (req, res, next) => {
+//         if (!roles.includes(req.user.role)) {
+//             return res.status(403).json({ success: false, message: "Access denied. Admin role required." });
+//         }
+//         next();
+//     };
+// }
+
 
 // const isAdmin = (req, res, next) => {
 //     if (req.user.role !== "admin") {
@@ -106,8 +133,115 @@
 //     }
 // });
 
-// module.exports = router;
+// // DELETE user (admin only with proper checks)
+// router.delete("/:id", authenticate, authorizeRoles("admin"), async (req, res) => {
+//     try {
+//         const { id } = req.params;
 
+//         // Validate ObjectId
+//         if (!mongoose.Types.ObjectId.isValid(id)) {
+//             return res.status(400).json({ success: false, message: "Invalid user ID format" });
+//         }
+
+//         // Check if user exists
+//         const userToDelete = await User.findById(id);
+//         if (!userToDelete) {
+//             return res.status(404).json({ success: false, message: "User not found" });
+//         }
+
+//         // Prevent self-deletion
+//         if (userToDelete._id.toString() === req.user.id) {
+//             return res.status(400).json({
+//                 success: false,
+//                 message: "You cannot delete your own account"
+//             });
+//         }
+
+//         // Prevent deletion of the last admin
+//         if (userToDelete.role === "admin") {
+//             const adminCount = await User.countDocuments({ role: "admin" });
+//             if (adminCount <= 1) {
+//                 return res.status(400).json({
+//                     success: false,
+//                     message: "Cannot delete the last admin user"
+//                 });
+//             }
+//         }
+
+//         // Delete the user
+//         await User.findByIdAndDelete(id);
+
+//         res.json({
+//             success: true,
+//             message: "User deleted successfully",
+//             deletedUser: {
+//                 id: userToDelete._id,
+//                 username: userToDelete.username,
+//                 role: userToDelete.role
+//             }
+//         });
+//     } catch (err) {
+//         console.error("Delete user error:", err);
+//         res.status(500).json({
+//             success: false,
+//             message: "Error deleting user",
+//             error: err.message
+//         });
+//     }
+// });
+
+// // UPDATE user (admin only)
+// router.put("/:id", authenticate, authorizeRoles("admin"), async (req, res) => {
+//     try {
+//         const { id } = req.params;
+//         const { username, role, password } = req.body;
+
+//         if (!mongoose.Types.ObjectId.isValid(id)) {
+//             return res.status(400).json({ success: false, message: "Invalid user ID" });
+//         }
+
+//         const user = await User.findById(id);
+//         if (!user) {
+//             return res.status(404).json({ success: false, message: "User not found" });
+//         }
+
+//         // Prevent changing the last admin's role
+//         if (user.role === "admin" && role !== "admin") {
+//             const adminCount = await User.countDocuments({ role: "admin" });
+//             if (adminCount <= 1) {
+//                 return res.status(400).json({
+//                     success: false,
+//                     message: "Cannot change role of the last admin"
+//                 });
+//             }
+//         }
+
+//         // Update fields
+//         if (username) user.username = username;
+//         if (role) user.role = role;
+//         if (password) user.password = password; // Will be hashed by pre-save hook
+
+//         await user.save();
+
+//         res.json({
+//             success: true,
+//             message: "User updated successfully",
+//             user: {
+//                 id: user._id,
+//                 username: user.username,
+//                 role: user.role
+//             }
+//         });
+//     } catch (err) {
+//         res.status(500).json({
+//             success: false,
+//             message: "Error updating user",
+//             error: err.message
+//         });
+//     }
+// });
+
+// module.exports = router;
 
 
 const express = require("express");

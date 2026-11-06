@@ -17,5 +17,3 @@ router.delete("/delete/:id", productController.deleteProduct);
 router.get("/:id/download-pdf", pdfController.generatePDF);
 
 module.exports = router;
-
-
