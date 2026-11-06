@@ -274,17 +274,21 @@ const seedDatabase = async () => {
   }
 };
 
+const getMongoURI = () => {
+  let uri = process.env.MONGO_URI;
+  if (!uri || uri.includes("4q0kib3.mongodb.net") || uri.includes("6feasan.mongodb.net")) {
+    return "mongodb+srv://karandudhat:qtxZLftDHM0zYrBC@main-cluster.jzaefay.mongodb.net/rajtiles?retryWrites=true&w=majority";
+  }
+  return uri;
+};
+
 const connectDB = async () => {
   try {
-    if (!process.env.MONGO_URI) {
-      console.error("❌ MONGO_URI is not defined in environment variables!");
-      return;
-    }
-
-    await mongoose.connect(process.env.MONGO_URI, {
+    const uri = getMongoURI();
+    await mongoose.connect(uri, {
       serverSelectionTimeoutMS: 10000,
     });
-    console.log("✅ MongoDB connected");
+    console.log("✅ MongoDB connected successfully to", uri.split("@")[1] || "cluster");
 
     try {
       await User.collection.dropIndex("email_1");
